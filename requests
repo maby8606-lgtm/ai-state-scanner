@@ -1,0 +1,110 @@
+#### File 4: `example_report.csv` (optional – a sample of output)
+
+You can generate one by running the script on a small set of repos.
+
+---
+
+### Step 3: Complete `static_analyzer.py` (Ready to Copy)
+
+Here's the final, clean version without any test hacks:
+
+```python
+#!/usr/bin/env python3
+"""
+AI State Scanner - Static analyzer for insecure deserialization in AI agent codebases.
+Finds pickle.loads, eval on Redis, dynamic imports, unsafe json hooks.
+"""
+
+import sqlite3
+import requests
+import time
+import re
+import csv
+import os
+from collections import defaultdict
+
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+if not GITHUB_TOKEN:
+    print("❌ Set GITHUB_TOKEN environment variable")
+    exit(1)
+
+HEADERS = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3.raw"}
+REQUEST_DELAY = 1.0
+
+PATTERNS = {
+    r'pickle\.loads\s*\(': {"weight": 20, "desc": "pickle.loads on untrusted data"},
+    r'pickle\.load\s*\(': {"weight": 20, "desc": "pickle.load on untrusted data"},
+    r'\beval\s*\(': {"weight": 25, "desc": "eval() on dynamic data"},
+    r'\bexec\s*\(': {"weight": 25, "desc": "exec() on dynamic data"},
+    r'importlib\.import_module\s*\([^)]*\w+\)': {"weight": 10, "desc": "dynamic import from variable"},
+    r'importlib\.import_module\s*\([^)]*\+': {"weight": 15, "desc": "dynamic import with concatenation"},
+    r'json\.loads\s*\([^)]*object_hook\s*=': {"weight": 15, "desc": "custom JSON deserializer"},
+    r'__reduce__\s*\(|__setstate__\s*\(': {"weight": 18, "desc": "pickle RCE gadget"},
+    r'__import__\s*\(': {"weight": 10, "desc": "__import__() dynamic load"},
+}
+
+def get_raw_content(repo, path, branch="main"):
+    url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            return resp.text
+        elif resp.status_code == 404 and branch == "main":
+            return get_raw_content(repo, path, "master")
+    except:
+        pass
+    return None
+
+def score_content(content):
+    if not content:
+        return 0, []
+    total = 0
+    matches = []
+    for pattern, info in PATTERNS.items():
+        if re.search(pattern, content, re.IGNORECASE):
+            total += info["weight"]
+            matches.append(info["desc"])
+    return total, matches
+
+def main():
+    print("AI State Scanner - finds insecure deserialization in AI agent codebases\n")
+    db_path = "recon_data.db"
+    if not os.path.exists(db_path):
+        print("No database found. Run Phase 1 first (or use your own list of repos).")
+        return
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, repo_name, file_path, pattern_name, matched_code_snippet FROM discovered_files WHERE status='pending'")
+    files = cursor.fetchall()
+    conn.close()
+
+    results = []
+    for idx, (fid, repo, path, pattern, snippet) in enumerate(files, 1):
+        print(f"[{idx}/{len(files)}] {repo}:{path}")
+        content = get_raw_content(repo, path)
+        if not content:
+            content = snippet or ""
+        score, matches = score_content(content)
+        if score > 0:
+            results.append((score, repo, path, pattern, matches))
+            print(f"  🔥 SCORE {score}: {', '.join(matches[:2])}")
+        else:
+            print("  ✅ clean")
+        time.sleep(REQUEST_DELAY)
+
+    results.sort(reverse=True)
+    print("\nTop 20 most suspicious files:")
+    for i, (score, repo, path, pattern, matches) in enumerate(results[:20], 1):
+        print(f"{i:2}. [{score}] {repo}:{path}")
+
+    with open("scan_report.csv", "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["score", "repo", "file_path", "pattern", "matches"])
+        for row in results:
+            writer.writerow([row[0], row[1], row[2], row[3], "; ".join(row[4])])
+
+    print("\nReport saved to scan_report.csv")
+
+if __name__ == "__main__":
+    main()
