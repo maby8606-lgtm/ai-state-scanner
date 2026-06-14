@@ -1,0 +1,7 @@
+#### File 2: `static_analyzer.py` (final working version – the one that gave us the top results)
+
+I'll provide the exact code we used (the one with scores and reachability check). Since we already have it working, just copy the final `static_analyzer.py` from earlier (the one that fetched content and scored). But we need the **final improved version** – I'll consolidate it below.
+
+**Important:** Remove any hardcoded tokens. Use environment variable.
+
+#### File 3: `requirements.txt`
